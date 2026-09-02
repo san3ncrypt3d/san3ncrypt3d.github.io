@@ -1,0 +1,272 @@
+---
+layout: post
+title: "Your vulnerability scanner is ranking the wrong things"
+date: 2026-09-02 09:00:00 -0400
+author: Sanjay B.
+categories: [Vulnerability Management, Open Source]
+excerpt: "A CVSS score describes a vulnerability. It does not describe your problem. So I built a tool that scores the difference, and released it."
+---
+
+<style>
+.vm-article{--vm-ink:#dce6ea;--vm-mid:#b7c3ca;--vm-soft:#8e9aa2;--vm-line:#2a3540;--vm-accent:#4fd6c2;--vm-wash:#111a20;font-size:18px;line-height:1.68;color:var(--vm-ink)}.vm-article h2{font-size:27px;line-height:1.25;margin:52px 0 16px;color:#fff}.vm-article h3{font-size:21px;line-height:1.3;margin:34px 0 12px;color:#fff}.vm-article p{margin:0 0 20px}.vm-article ul,.vm-article ol{margin:0 0 22px 22px}.vm-article li{margin-bottom:7px}.vm-article a{color:var(--vm-accent);text-decoration:none;border-bottom:1px solid rgba(79,214,194,.35)}.vm-article a:hover{border-bottom-color:var(--vm-accent)}.vm-article code{font-family:'JetBrains Mono',monospace;font-size:.86em;background:var(--vm-wash);padding:2px 6px;border-radius:4px;color:var(--vm-accent)}.vm-article pre{background:#0b1115;color:#dce6ea;border:1px solid var(--vm-line);border-radius:8px;padding:20px 22px;overflow-x:auto;margin:0 0 24px;font:14px/1.62 'JetBrains Mono',monospace}.vm-article pre code{background:none;padding:0;color:inherit}.vm-article .note{border-left:3px solid var(--vm-accent);background:var(--vm-wash);padding:18px 22px;margin:0 0 28px;color:var(--vm-mid)}.vm-article .note b{color:#fff}.vm-article figure{margin:36px 0 40px}.vm-article figure img{width:100%;height:auto;display:block;border:1px solid var(--vm-line);border-radius:8px}.vm-article figcaption{font-size:14.5px;line-height:1.5;color:var(--vm-soft);margin-top:12px;padding-left:14px;border-left:2px solid var(--vm-line)}.vm-article .fnum{display:block;font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--vm-accent);margin-bottom:5px}.vm-article .tscroll{width:100%;overflow-x:auto;margin:0 0 26px}.vm-article table{border-collapse:collapse;width:100%;font-size:15.5px}.vm-article th,.vm-article td{border:1px solid var(--vm-line);padding:9px 13px;text-align:left;vertical-align:top}.vm-article th{background:var(--vm-wash);color:#fff;font-weight:600}.vm-article hr{border:0;border-top:1px solid var(--vm-line);margin:44px 0}.vm-article .lede{font-size:20px;line-height:1.6;color:var(--vm-mid)}
+</style>
+
+<div class="vm-article" markdown="0">
+
+<p class="lede">A CVSS score describes a vulnerability. It does not describe your problem.</p>
+
+<p>Monday morning. The scanner has finished and there are 1,400 findings across the estate, forty
+of them rated Critical. Someone has to decide what the platform team actually works on this week,
+and the only ordering available is a column of numbers that describes each flaw in the abstract,
+as though every machine in the company were interchangeable.</p>
+
+<p>They are not interchangeable. One of those Criticals is a Java library on the payment gateway,
+which is internet-facing and in PCI scope. Another is the same library, same version, same 9.8,
+sitting on a box in the data science lab that was decommissioned in March and never removed from
+the scan target list.</p>
+
+<p>Your scanner gives both of them a 9.8. It has no way not to.</p>
+
+<h2>Severity is a property of the flaw. Risk is a property of your estate.</h2>
+
+<p>This is the distinction that gets flattened. <a href="https://www.first.org/cvss/">CVSS</a> is a
+good standard doing what it was designed to do: describe the intrinsic characteristics of a
+vulnerability so they are comparable across organisations. The base score deliberately excludes
+your environment, because it cannot know your environment.</p>
+
+<p>So the mistake is not CVSS. The mistake is using a deliberately context-free number as a work
+queue.</p>
+
+<p>The industry's first correction was <a href="https://www.first.org/epss/">EPSS</a>, which
+estimates the probability that a CVE will be exploited in the wild within thirty days. It helps a
+great deal, because the distribution is brutally skewed: most published CVEs will never be
+exploited, and a 9.8 with a 0.2% EPSS is a different animal from a 7.5 with 40%. The second
+correction was CISA's
+<a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog">Known Exploited
+Vulnerabilities</a> catalogue, which replaces prediction with observation. Someone has actually
+been seen doing this.</p>
+
+<p>Both are real improvements. Neither answers the question that decides your Monday: is it
+deployed here, can anyone reach it here, and what does it cost this business if they do?</p>
+
+<h2>Three questions, multiplied</h2>
+
+<p>I built a tool called <a href="https://github.com/san3ncrypt3d/vulnometry">vulnometry</a> around
+one line of arithmetic.</p>
+
+<pre><code>BEI = 1000 * Threat^0.8 * Reachability^0.7 * Consequence^0.6</code></pre>
+
+<p>Three questions:</p>
+
+<ul>
+<li><b>Threat.</b> Will anyone actually try? From KEV (observed), EPSS (predicted), and whether
+working exploit code is circulating.</li>
+<li><b>Reachability.</b> Can they get to it <i>here</i>? From the CVSS attack vector, multiplied by
+what your topology actually looks like.</li>
+<li><b>Consequence.</b> What does it cost <i>us</i>? From the CVSS impact sub-metrics, scaled by
+asset criticality, data classification and regulatory scope.</li>
+</ul>
+
+<p>The interesting decision is the multiplication.</p>
+
+<p>Nearly every prioritisation scheme in this space is a weighted sum: some CVSS, some EPSS, a
+bonus for KEV, maybe a nudge for asset criticality. Sums have a specific failure mode. A large
+enough score in one term carries the finding regardless of the others, which is exactly how the
+decommissioned lab box ends up in your sprint.</p>
+
+<p>Multiplying makes every factor a veto. If nobody can reach it, reachability approaches zero and
+so does the result, no matter how alarming the CVSS score.</p>
+
+<div class="note">
+<b>The part I care about:</b> this needs no special-case rule. There is no
+<code>if not_deployed: override</code> branch anywhere in the code. The arithmetic already says it.
+You cannot argue in a review meeting about an exception that does not exist.
+</div>
+
+<h2>Telling it what you run</h2>
+
+<p>Vulnometry reads one file. A minimal version is four lines:</p>
+
+<pre><code>assets:
+  - name: checkout-api
+    tier: 1
+    internet_exposed: true</code></pre>
+
+<p>A realistic one carries more:</p>
+
+<pre><code>assets:
+  - name: checkout-api
+    tier: 1                          # 1 mission-critical, 3 supporting
+    owner: payments@northwind.example
+    business_unit: Commerce
+    environment: production
+    internet_exposed: true
+    data_classification: restricted
+    regimes: [pci-dss, gdpr]
+    components: ["org.apache.logging.log4j*", "spring-*"]
+    hosts: ["checkout-*.prod.northwind.example"]
+
+  - name: internal-wiki
+    tier: 3
+    internet_exposed: false
+    data_classification: internal
+    compensating_controls: ["VPN-only access"]
+
+  - name: ml-sandbox
+    tier: 3
+    internet_exposed: false
+    deployed: false                  # decommissioned in March</code></pre>
+
+<p>Every field except the name is optional. A missing field is not treated as a safe field:
+unknown internet exposure is discounted rather than dismissed, and an asset you have not described
+is scored pessimistically. Quietly treating undescribed assets as safe is how findings get lost,
+and lost findings are the ones that turn into incidents.</p>
+
+<h2>The moment it clicks</h2>
+
+<p>Same CVE, five places, one command.</p>
+
+<figure>
+<img src="{{ site.baseurl }}/images/2026-09-02-vulnometry/cli-compare.png" alt="Terminal output of vulnometry compare for CVE-2021-44228 across five assets, showing BEI scores from 928.9 down to 0 with different verdicts and due dates">
+<figcaption><span class="fnum">Figure 1</span>Log4Shell measured against five assets in the same
+estate. The Threat column is identical on every row, because threat is a property of the CVE. The
+929-point spread is entirely reachability and consequence.</figcaption>
+</figure>
+
+<p>Log4Shell. One of the most consequential vulnerabilities of the last decade, CVSS 10.0,
+confirmed exploited, ransomware-linked. Your scanner writes 10.0 against all five rows.</p>
+
+<p>Look at what diverges. Two days for the payment gateway. Next maintenance window for the wiki.
+Nothing at all for the machine that no longer exists, because <code>deployed: false</code> takes
+reachability to zero and the product collapses with it.</p>
+
+<h2>Showing its work</h2>
+
+<p>A scoring tool that will not explain itself is a tool nobody trusts, and rightly so.</p>
+
+<figure>
+<img src="{{ site.baseurl }}/images/2026-09-02-vulnometry/cli-measure.png" alt="Detailed vulnometry measure output showing factor bars, CVSS, EPSS, KEV status, fixed versions, a How this was measured breakdown, and a directive">
+<figcaption><span class="fnum">Figure 2</span>The forensic view. Every point in the score is
+attributable to a named piece of evidence, and the directive at the bottom is the sentence that
+goes in the ticket.</figcaption>
+</figure>
+
+<p>If you disagree with the tier weight or the regulatory multiplier, you can see precisely which
+line to argue with, and they all live in one file of roughly 250 lines that is meant to be edited.
+The derivation is written up in
+<a href="https://github.com/san3ncrypt3d/vulnometry/blob/main/docs/SCORING.md">docs/SCORING.md</a>.</p>
+
+<p>The due date is policy rather than a guess. Contain starts at seven days, tier 1 halves it, PCI
+scope takes 60% of what remains, production another 80%. Two days. The same verdict on a tier-3
+internal box lands at twelve.</p>
+
+<h2>The part that actually saves the week</h2>
+
+<p>Real vulnerability management does not happen at a prompt. It happens in a spreadsheet somebody
+was emailed.</p>
+
+<pre><code>vulnometry import northwind-scan.xlsx</code></pre>
+
+<p>That export has a title block above the header, a summary tab before the data tab, a tab with no
+findings in it at all, vendor-specific column names, and one cell containing two CVE identifiers
+separated by a comma. Vulnometry finds the header row rather than assuming row one, picks the sheet
+with findings in it, matches columns by header against an alias table, and splits multi-CVE cells
+into separate findings.</p>
+
+<figure>
+<img src="{{ site.baseurl }}/images/2026-09-02-vulnometry/cli-import.png" alt="vulnometry import output showing 13 findings above a 300 BEI threshold, sorted by exposure, with verdicts, owners and due dates">
+<figcaption><span class="fnum">Figure 3</span>Twenty-four findings from a messy scanner export,
+scored against the inventory and filtered to what matters. Note the last line: four findings were
+reduced to negligible exposure by business context.</figcaption>
+</figure>
+
+<p>It also reads native JSON from Trivy, Grype, Snyk, OSV-Scanner, Dependabot and SARIF, plus
+lockfiles and SBOMs.</p>
+
+<p>Then it hands back two artefacts. An <b>annotated workbook</b> with four sheets: Findings (every
+row colour-coded by verdict, filterable, header frozen), Action Plan (only what needs doing, sorted
+by due date), By Owner (workload per team, so the queue can be distributed), and Method (how the
+numbers were produced).</p>
+
+<p>And a <b>dashboard</b>, which is one self-contained HTML file. No server, no CDN, no build step
+and no JavaScript at all. The charts are inline SVG generated in Python. It opens from a
+<code>file://</code> URL, survives being forwarded to an executive, and works on an air-gapped
+machine.</p>
+
+<figure>
+<img src="{{ site.baseurl }}/images/2026-09-02-vulnometry/dashboard-overview.png" alt="Vulnometry HTML dashboard showing KPI tiles, a verdict donut chart, a reachability versus consequence scatter plot, exposure by business unit and actionable load by owner">
+<figcaption><span class="fnum">Figure 4</span>The chart I care about is on the right. Reachability
+against consequence, bubble size as threat. The top-right corner is the work. The left edge is
+everything a severity-only view would have ranked identically.</figcaption>
+</figure>
+
+<h2>Optional intelligence, deliberately</h2>
+
+<p>Vulnometry speaks Model Context Protocol, so it drops into Claude Code, Claude Desktop, Cursor,
+Zed or Cline in one command:</p>
+
+<pre><code>claude mcp add vulnometry -- vulnometry serve mcp</code></pre>
+
+<p>Then you can ask "what do we run, and is CVE-2021-44228 urgent for any of it?" and get an answer
+grounded in your actual inventory. It also runs against Ollama, vLLM, llama.cpp, LM Studio, OpenAI,
+Azure AI Foundry, AWS Bedrock, Anthropic and Gemini. One action registry, seventeen actions, every
+provider generated from the same source.</p>
+
+<p>But there is a rule underneath all of it: <b>no model ever produces a number.</b> Scoring is
+deterministic and reproducible on any machine. A model can explain a verdict; it can never compute
+one. Every command except <code>vulnometry ask</code> works with no inference stack installed at
+all.</p>
+
+<p>You do not want a 7B model inventing a CVSS score. By construction, it cannot.</p>
+
+<h2>What this does not do</h2>
+
+<p>Worth being direct about the limits, because vulnerability tooling has a credibility problem and
+overclaiming is how it got one.</p>
+
+<p>Reachability here is network and deployment reachability, derived from your inventory. It is not
+function-level reachability analysis, and it does not read your call graph to work out whether the
+vulnerable method is ever invoked. That is what commercial tools like Endor Labs and Snyk do, and
+it is a genuinely harder problem.</p>
+
+<p>Exploit discovery is a heuristic GitHub search. A match means public code claims to exploit the
+CVE, not that it works.</p>
+
+<p>The weights are reasoned defaults, not empirical constants derived from breach data. Nobody's
+are, publicly. That is exactly why every factor prints its reasoning, so you can find the default
+you disagree with and change it.</p>
+
+<p>And the whole thing is only as good as your inventory. Vulnometry cannot tell you what you run.
+It can only make that knowledge count for something once you have written it down, which is a thing
+most organisations discover they should have done anyway.</p>
+
+<h2>Try it</h2>
+
+<pre><code>pip install vulnometry
+
+vulnometry doctor
+curl -O https://raw.githubusercontent.com/san3ncrypt3d/vulnometry/main/examples/vulnometry.yaml
+vulnometry compare CVE-2021-44228</code></pre>
+
+<p>Apache-2.0. Python 3.10 or newer. Four runtime dependencies. Fifty-eight tests that run offline
+in under a second.</p>
+
+<div class="tscroll">
+<table>
+<tr><th>Where</th><th>Link</th></tr>
+<tr><td>Source</td><td><a href="https://github.com/san3ncrypt3d/vulnometry">github.com/san3ncrypt3d/vulnometry</a></td></tr>
+<tr><td>Package</td><td><a href="https://pypi.org/project/vulnometry/">pypi.org/project/vulnometry</a></td></tr>
+<tr><td>Getting started</td><td><a href="https://github.com/san3ncrypt3d/vulnometry/blob/main/QUICKSTART.md">QUICKSTART.md</a></td></tr>
+<tr><td>The scoring model</td><td><a href="https://github.com/san3ncrypt3d/vulnometry/blob/main/docs/SCORING.md">docs/SCORING.md</a></td></tr>
+<tr><td>How the code fits together</td><td><a href="https://github.com/san3ncrypt3d/vulnometry/blob/main/docs/ARCHITECTURE.md">docs/ARCHITECTURE.md</a></td></tr>
+<tr><td>Release notes</td><td><a href="https://github.com/san3ncrypt3d/vulnometry/releases/tag/v0.1.0">v0.1.0</a></td></tr>
+</table>
+</div>
+
+<p>The issue I most want to receive is a scoring dispute. If a verdict looks wrong to you, the
+"How this was measured" block shows exactly where we disagree, and that is a far more productive
+conversation than arguing about a number with no derivation attached. There is an
+<a href="https://github.com/san3ncrypt3d/vulnometry/issues/new/choose">issue template</a> for
+exactly that.</p>
+
+</div>
