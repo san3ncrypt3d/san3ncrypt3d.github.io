@@ -1,10 +1,10 @@
 ---
 layout: post
-title: "Beyond Severity Scores: I Tested Jev on SCA and SAST Findings"
+title: "Beyond Severity Scores: Where Jev Actually Helps in Security Triage"
 date: 2026-09-23 20:00:00 -0400
 author: Sanjay B.
 categories: [Vulnerability Management, AI Security, Research]
-excerpt: "I ran TypeSafe's Jev decision model on 1,084 SCA and SAST test cases and 50,000 more findings. It read context better than CVSS, tied a simple scoring formula, was 14 to 30 times faster than frontier models, and could be talked into REVIEW by one sentence."
+excerpt: "If a human has already verified the facts about a finding, a rule decides priority better than any model. So I tested where TypeSafe's Jev actually helps: reading raw code and config into those facts, on 450 findings, against regex rules and Claude Sonnet 5."
 ---
 
 <style>
@@ -13,10 +13,17 @@ excerpt: "I ran TypeSafe's Jev decision model on 1,084 SCA and SAST test cases a
 
 <div class="jv-article" markdown="0">
 
-<p class="lede">A hands-on walkthrough and research report. Everything here comes from one frozen, reproducible
-experiment: a 1,084-case benchmark (879 API calls), a 50,000-finding scale run, and a head-to-head
-timing test against three frontier chat models. Raw responses are kept, and every number traces to
-a file in the repo.</p>
+<p class="lede">A hands-on walkthrough and research report. Everything here comes from frozen, reproducible
+experiments: a 1,084-case benchmark, a 50,000-finding scale run, a timing test against three
+frontier chat models, and a second experiment on 450 findings that arrive as raw code and config.
+Raw responses are kept, and every number traces to a file in the repo.</p>
+<div class="note"><strong>The short version.</strong> If a human has already verified the facts about a finding (is the input
+attacker-controlled, is the sink reachable, is it sanitized, is it authenticated), you don't need
+Jev. Write the rule and apply it; that's cheaper, exact and auditable. Jev earns its keep one step
+earlier, reading raw code, route and deployment config to <em>produce</em> those facts for findings nobody
+has verified yet. On 450 such findings, Jev plus a fixed rule sent 92 of them to a human and missed
+none of the 74 urgent ones. Sorting by scanner severity sent 366 and missed 7. Regex rules sent 49
+and missed 33. Sections 12 and 13 are the heart of the post.</div>
 <hr />
 <h2>1. Why I tested this</h2>
 <p>Anyone who has worked a vulnerability backlog knows the problem. The scanner says CRITICAL, the
@@ -32,10 +39,8 @@ attacker-controlled, whether the sink is reachable, or whether the code ships at
 spreadsheet formula. I wanted to know if a structured decision model could do that combining
 step, and how it would compare with a simple deterministic rule.</p>
 <p>The question I set out to answer:</p>
-<blockquote>
-<p>Can a structured decision model prioritize security findings using contextual evidence that
-severity scores don't capture?</p>
-</blockquote>
+<div class="note">Can a structured decision model prioritize security findings using contextual evidence that
+severity scores don't capture?</div>
 <p>I went in without assuming Jev would do well. A negative result would have been fine.</p>
 <h2>2. What is Jev?</h2>
 <p>Jev is a model from TypeSafe, available on OpenRouter as <code>typesafe/jev-1.13</code>. TypeSafe calls it
@@ -681,56 +686,273 @@ calibration.</p>
 <img src="{{ site.baseurl }}/images/2026-09-23-jev-security/fig8_latency.png" alt="Latency" loading="lazy">
 <figcaption><span class="fnum">Figure 28</span>Latency.</figcaption>
 </figure>
-<h2>12. Deterministic rules vs. why Jev</h2>
-<p>I think this is the honest core of the whole exercise, so I'll lay it out directly.</p>
-<p><strong>The simple points formula (B1) matched Jev on disposition accuracy.</strong> 53% vs 55% on SCA; 38% vs
-49% on SAST, which isn't a significant difference either. B1 costs nothing, runs in microseconds,
-is fully auditable, and can't be talked into anything by a sentence in the description field. If
-your findings already arrive as clean, complete, structured fields, a well-written rule is a
-strong baseline, and you should start there.</p>
-<p>That parity comes with an asterisk, though. I wrote B1 and the rubric together, so they share
-signals and B1 gets graded on a policy it partly shares. An independent reference would probably
-treat B1 less kindly. Jev had no access to the rubric.</p>
-<p>Here's where Jev earned its place in this data:</p>
+<h2>12. If you already have the fields, use a rule</h2>
+<p>A reader asked me the obvious question after the first version of this post: <em>if I already have the
+CWE, attacker control, source-to-sink reachability, sanitization, authentication and data
+sensitivity, why would I need Jev at all? That's everything a deterministic calculation needs.</em></p>
+<p>They're right, and the benchmark above says so if you read it carefully. The reference labels I
+graded Jev against were produced by exactly such a calculation. A rule that encodes your policy
+agrees with itself 100% of the time; Jev got about half. Even my crude points formula (B1) tied
+Jev on SCA (53% vs 55%) and wasn't significantly different on SAST. Where Jev differed from my rule,
+it wasn't adding insight. It was applying different weights, most visibly to KEV and to
+authentication. If you have a policy, that's a defect: you want your weights, written down,
+auditable, and immune to a "known false positive" sentence in the description field.</p>
+<p>So for verified fields plus a policy you can write down:</p>
 <ul>
-<li><strong>It reads the inputs rules can't.</strong> The same facts as a prose paragraph, or with different
-  key names, still produced the same disposition 80 to 85% of the time. A rule engine needs a
-  parser and a field mapping for each new scanner format. Jev just read them.</li>
-<li><strong>It gives you a probability and a confidence, not just a label.</strong> That supports "auto-route
-  the confident cases, send the rest to a person", which a points total can only fake with
-  hand-picked bands.</li>
-<li><strong>It has a REVIEW option it will actually use.</strong> When a critical fact was explicitly unknown,
-  Jev routed the case to a human half the time. My B1 formula can't do that by construction. It
-  quietly substitutes a midpoint.</li>
-<li><strong>It fixed B1's worst habit on SAST.</strong> B1 flagged every urgent SAST case, but it also escalated
-  60% of findings above the rubric level. Jev's false escalation rate was 5%, and its urgent-flag
-  precision was 80% against B1's 52%.</li>
-<li><strong>It's cheap and fast enough not to matter.</strong> A few cents per thousand decisions, a median
-  of 192 ms, and 50,000 findings in 21 minutes for $2.61.</li>
+<li><strong>Use a rule for the decision.</strong> Mechanical facts (CVSS bands, EPSS thresholds, KEV lookups) and
+  policy floors ("KEV-listed and internet-facing gets fixed this week") belong in code.</li>
+<li><strong>Don't route verified facts through a model.</strong> You'd be paying to add noise.</li>
 </ul>
-<p><strong>What about just asking a frontier model?</strong> On my 40-case comparison, Claude Sonnet 5 matched
-the rubric more often (78% vs 55%). It also took 14 times as long per decision and cost 83 times
-as much, and its "probabilities" are numbers it wrote into JSON, not a distribution the model
-exposes. For a nightly re-triage of an entire backlog that's the difference between $2.60 and
-roughly $215, and between minutes and hours. For a few hundred hard cases a day, a frontier model
-may well be worth it. A sensible pipeline could use both: Jev for the whole backlog, with its
-REVIEW and low-confidence cases going to a stronger model or a person.</p>
-<p>And here's where the deterministic side should win:</p>
+<p>The frontier comparison points the same way from the other side. On 40 matched cases, Claude
+Sonnet 5 matched my rubric more often than Jev (78% vs 55%). But if the rubric is already written
+down, neither model is the right tool for the final call.</p>
+<p>The catch is in the word <em>verified</em>. Those fields aren't raw data. "Attacker-controlled: true" and
+"sanitization: effective" are conclusions someone reached by reading code, route registration,
+framework conventions and deployment config. That reading is the expensive part of AppSec triage,
+and it's where the next section tests Jev.</p>
+<h2>13. Where Jev earns its keep: before the human</h2>
+<p>The first experiment handed Jev pre-digested fields, which is the one situation where it's least
+useful. So I ran a second, separately frozen experiment on the step before that. A SAST finding
+arrives with <strong>only raw evidence</strong>:</p>
 <ul>
-<li><strong>Mechanical facts.</strong> CVSS bands, EPSS thresholds, KEV lookups, dates, and counts belong in
-  code. That's how I set up the experiment, and it's what TypeSafe recommends.</li>
-<li><strong>Hard policy floors.</strong> Jev underweighted KEV. If your policy is "anything KEV-listed and
-  internet-facing gets fixed this week", write that as a rule and don't hope a model learns it.</li>
-<li><strong>Auditability and adversarial robustness.</strong> A rule ignores the description field entirely. Jev
-  let a planted sentence push 17 of 20 cases toward REVIEW.</li>
+<li>the file path</li>
+<li>the flagged code snippet (the handler, plus any helper functions it calls)</li>
+<li>the route registration</li>
+<li>the deployment config</li>
 </ul>
-<p>The design I'd actually build uses both. Code computes the facts and enforces the non-negotiable
-floors. Jev makes the judgment call over the messy context that's left, and its probability and
-confidence decide whether a human looks.</p>
-<h2>13. Where Jev worked</h2>
+<p>Nothing tells you whether the input is attacker-controlled or whether the route is live. Four
+things then have to produce seven fields (attacker control, reachability, sanitization,
+authentication, internet exposure, test code, sensitive data):</p>
+<ol>
+<li><strong>Jev</strong>, one Decisions request per finding, one narrow question per field (five Nouls and two
+   Choices), each pointing at the part of the evidence it should read.</li>
+<li><strong>Regex rules</strong>, the kind of thing you'd write in an afternoon without a model.</li>
+<li><strong>Claude Sonnet 5</strong>, asked the same questions as a JSON prompt, on a stratified subset of 150.</li>
+<li><strong>The true fields</strong>, as the ceiling.</li>
+</ol>
+<p>Every one of them feeds the <strong>same frozen rule</strong> from the first experiment. The only thing that
+differs is how well each one reads the evidence. Asset criticality, process privilege and
+compensating controls come from inventory, as they would from a CMDB.</p>
+<p>The findings are synthetic, with the true value of every field known by construction. There were
+two sets:</p>
+<ul>
+<li><strong>Set A (300 findings)</strong> uses Flask and Express idioms. I wrote the regex with these templates in
+  mind, so it's close to a best case for regex.</li>
+<li><strong>Set B (150 findings)</strong> uses FastAPI, NestJS and Terraform. I wrote it <em>after</em> committing the
+  regex and the Jev questions to git, to simulate your rules meeting a codebase they weren't built
+  for. I knew the regex while writing it, so set B is probably biased against the regex, just as
+  set A is biased toward it. I report both.</li>
+</ul>
+<p>Both sets include traps that show up in real code:</p>
+<ul>
+<li>values a user stored earlier and the handler reads back (second-order sources)</li>
+<li>sanitizers hidden inside helpers with bland names</li>
+<li>a comment claiming "validated by the gateway" on unvalidated code</li>
+<li>caching decorators that look like guards</li>
+<li>route registrations that are commented out or behind a disabled flag</li>
+<li>dev scripts whose path doesn't contain the word "test"</li>
+</ul>
+<p>Here's one held-out finding exactly as Jev saw it, with Jev's stored answers, the regex and the
+truth printed underneath:</p>
+<figure>
+<img src="{{ site.baseurl }}/images/2026-09-23-jev-security/v2_raw_evidence_example.png" alt="A raw-evidence finding and the answers" loading="lazy">
+<figcaption><span class="fnum">Figure 29</span>A raw-evidence finding and the answers.</figcaption>
+</figure>
+<p>The regex reads this as not attacker-controlled, not reachable and not internet-facing, so the
+rule calls it STANDARD. Jev reads the NestJS body parameter, the module registration and the
+Terraform ingress correctly, ignores the comment, and the same rule calls it ACCELERATED, which is
+the correct answer.</p>
+<h3>The result that matters: human workload</h3>
+<figure>
+<img src="{{ site.baseurl }}/images/2026-09-23-jev-security/fig12_v2_human_queue.png" alt="Human queue and missed urgent findings" loading="lazy">
+<figcaption><span class="fnum">Figure 30</span>Human queue and missed urgent findings.</figcaption>
+</figure>
+<div class="tscroll">
+<table>
+<thead>
+<tr>
+<th>Starting from raw evidence (450 findings, 74 truly urgent)</th>
+<th>Sent to a human</th>
+<th>Urgent caught</th>
+<th>Urgent missed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scanner severity (review every HIGH/CRITICAL)</td>
+<td>366 (81%)</td>
+<td>67</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Regex rules + rule</td>
+<td>49 (11%)</td>
+<td>41</td>
+<td><strong>33</strong></td>
+</tr>
+<tr>
+<td><strong>Jev fields + rule</strong></td>
+<td><strong>92 (20%)</strong></td>
+<td><strong>74</strong></td>
+<td><strong>0</strong></td>
+</tr>
+<tr>
+<td>Perfect fields + rule (the floor)</td>
+<td>74 (16%)</td>
+<td>74</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Severity sorting makes a human look at four out of five findings and still misses seven urgent
+ones. Regex looks efficient until it meets an unfamiliar framework: it missed 9 urgent findings in
+set A and all 24 in set B. Jev plus the rule sent a human 92 findings, 18 more than a perfect
+reader would, and caught every urgent finding in both sets. That's the workload reduction the first
+experiment couldn't show: from reviewing 366 findings to reviewing 92, without dropping any urgent
+ones.</p>
+<figure>
+<img src="{{ site.baseurl }}/images/2026-09-23-jev-security/fig13_v2_field_accuracy.png" alt="Field accuracy by set" loading="lazy">
+<figcaption><span class="fnum">Figure 31</span>Field accuracy by set.</figcaption>
+</figure>
+<p>Field by field, Jev was right on:</p>
+<ul>
+<li>99.8% of attacker-control answers</li>
+<li>100% of reachability and internet-exposure answers</li>
+<li>99.6% of test-code answers</li>
+<li>98.7% of sensitive-data answers</li>
+<li>90% of sanitization answers</li>
+<li>92% of authentication answers</li>
+</ul>
+<p>It got all seven fields right on 80% of findings. The regex managed 70% on set A and 2% on set B.
+Jev held up on the unfamiliar frameworks, with all seven right on 78% of set B.</p>
+<p>On the traps:</p>
+<div class="tscroll">
+<table>
+<thead>
+<tr>
+<th>Trap</th>
+<th>Regex</th>
+<th>Jev</th>
+<th>Sonnet 5 (subset)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Value a user stored earlier, read back</td>
+<td>0 of 70</td>
+<td><strong>70 of 70</strong></td>
+<td>24 of 27</td>
+</tr>
+<tr>
+<td>Route registration commented out</td>
+<td>10 of 26</td>
+<td><strong>26 of 26</strong></td>
+<td>9 of 9</td>
+</tr>
+<tr>
+<td>Route behind a disabled flag</td>
+<td>15 of 26</td>
+<td><strong>26 of 26</strong></td>
+<td>12 of 12</td>
+</tr>
+<tr>
+<td>Dev/seed script without "test" in the path</td>
+<td>0 of 16</td>
+<td><strong>16 of 16</strong></td>
+<td>3 of 3</td>
+</tr>
+<tr>
+<td>Sanitizer hidden in a helper function</td>
+<td><strong>62 of 62</strong></td>
+<td>51 of 62</td>
+<td>13 of 18</td>
+</tr>
+<tr>
+<td>"TODO: add validation" above working validation</td>
+<td><strong>11 of 11</strong></td>
+<td>7 of 11</td>
+<td>2 of 4</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The last two rows are where Jev is weakest: judging whether a sanitizer actually works. Its
+mistakes there lean the safe way:</p>
+<ul>
+<li><strong>Sanitization errors all went one way.</strong> Jev called 32 genuinely effective sanitizers "none" and
+  10 "partial", and never once called missing or partial sanitization effective.</li>
+<li><strong>Authentication errors mostly went the same way.</strong> Jev read 34 guarded routes as unguarded, but
+  4 of 191 unguarded routes as requiring a login, which is the unsafe direction.</li>
+</ul>
+<p>Missing a real sanitizer or guard pushes a finding <em>up</em> the queue, which is why recall stayed at
+100% while the queue grew from 74 to 92.</p>
+<p>Unlike the urgency judgment in the first experiment, these narrow factual questions came back well
+calibrated. The Brier score per field ranged from 0.003 to 0.071.</p>
+<h3>Against Sonnet 5, on the same 150 findings</h3>
+<p>Both caught all 24 urgent findings in the subset:</p>
+<div class="tscroll">
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Jev</th>
+<th>Sonnet 5</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Human queue</td>
+<td>31 of 150 (21%)</td>
+<td>30 of 150 (20%)</td>
+</tr>
+<tr>
+<td>All seven fields correct</td>
+<td>79%</td>
+<td>73%</td>
+</tr>
+<tr>
+<td>Median time per finding</td>
+<td>158 ms</td>
+<td>2,586 ms (16x slower)</td>
+</tr>
+<tr>
+<td>Cost per finding</td>
+<td>$0.000055</td>
+<td>$0.0040 (72x more expensive)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>For this narrow reading job, a frontier model bought nothing that Jev didn't already provide. Jev
+costs about $0.06 per thousand findings; Sonnet 5 costs about $4.</p>
+<h3>What didn't work</h3>
+<p>My pre-registered "send uncertain answers to a human too" rule was too cautious. It routed any
+finding where a Noul landed between 0.25 and 0.75, or a Choice confidence fell below 0.40. That
+tripled the queue, to 265 of 450, without catching a single extra urgent finding, because plain Jev
+plus the rule had already caught them all. On this data the probabilities were good enough that the
+0.5 cut-off alone did the job. On your data, pick the band from labeled examples.</p>
+<figure>
+<img src="{{ site.baseurl }}/images/2026-09-23-jev-security/v2_results.png" alt="v2 results" loading="lazy">
+<figcaption><span class="fnum">Figure 32</span>v2 results.</figcaption>
+</figure>
+<h3>The limits of this part</h3>
+<ul>
+<li>These are synthetic snippets I wrote, not your codebase. Real code has longer call chains and
+  sanitizers defined three files away.</li>
+<li>I wrote both the evidence and the regex. Set A flatters the regex and set B punishes it, and
+  real life sits somewhere in between.</li>
+<li>450 findings across six vulnerability classes and four frameworks. It's a demonstration of the
+  pipeline shape, not a measurement of your false-negative rate.</li>
+</ul>
+<h2>14. Where Jev worked</h2>
 <ul>
 <li>It used context over severity labels: 24 of 24 conflict cases moved in the right direction, and
   CVSS 5.3 to 9.8 flipped no dispositions on its own.</li>
+<li>Reading raw evidence into facts for a fixed rule, it cut the human queue from 366 findings
+  (severity sorting) to 92 of 450, and missed none of the 74 urgent ones.</li>
+<li>It read unfamiliar frameworks (FastAPI, NestJS, Terraform) as well as familiar ones, where regex
+  rules collapsed, and it matched Claude Sonnet 5 at 1/72nd of the cost.</li>
 <li>It ranked urgency well, with an AUC of 0.93 to 0.97.</li>
 <li>It was clearly better than sorting by severity (p ≈ 1e-10 pooled) and at least as good as a
   hand-written points formula.</li>
@@ -742,8 +964,11 @@ confidence decide whether a human looks.</p>
 <li>It resisted blunt "SYSTEM INSTRUCTION" injection text.</li>
 <li>It was very cheap and fast.</li>
 </ul>
-<h2>14. Where Jev struggled</h2>
+<h2>15. Where Jev struggled</h2>
 <ul>
+<li>Given verified fields, it adds nothing over a rule, and it applied different weights than my
+  policy.</li>
+<li>Judging whether a hidden sanitizer actually works was its weakest reading task (51 of 62).</li>
 <li>It agreed with the rubric about half the time on disposition. Most misses were one level apart,
   and 95% of Score answers were within one level. But half is half.</li>
 <li>It consistently undershoots on SAST compared with my rubric: 51 of 57 disagreements went to
@@ -757,8 +982,11 @@ confidence decide whether a human looks.</p>
   4.5% urgency rate, a 0.5 threshold gave 29% precision.</li>
 <li>On 40 matched cases, Claude Sonnet 5 agreed with the rubric more often (78% vs 55%).</li>
 </ul>
-<h2>15. What I would and would not automate</h2>
-<p><strong>I would</strong> use Jev as a triage layer that sorts and routes. Order a backlog by P(urgent), let
+<h2>16. What I would and would not automate</h2>
+<p><strong>I would</strong> use Jev to read raw evidence and fill in the facts about findings nobody has verified
+yet, one narrow question per fact, and let a deterministic rule that encodes my policy make the call.
+Humans then review what the rule ranks high. <strong>I would</strong> also use Jev as a triage layer that sorts
+and routes. Order a backlog by P(urgent), let
 high-confidence DEFERs of unreachable, uncontrolled-input findings drop to a slower queue, and
 send REVIEW or low-confidence cases to a person along with the facts that drove them.</p>
 <p><strong>I would not</strong> let a Jev answer close a finding, suppress an alert, mark something as accepted
@@ -766,7 +994,7 @@ risk, or skip a KEV deadline on its own. A 0.9 probability here means "this rank
 It doesn't mean "safe to act without looking". The calibration numbers above are the reason. So
 is the fact that one sentence of untrusted text moved decisions.</p>
 <p>Decision support, yes. Automatic remediation or suppression, no.</p>
-<h2>16. Reproducing the experiment</h2>
+<h2>17. Reproducing the experiment</h2>
 <p>Everything is in the
 <a href="https://github.com/san3ncrypt3d/jev-security-prioritization">repo</a>, including every raw response, so you can recompute every number
 without an API key.</p>
@@ -781,6 +1009,7 @@ pytest -q
 python scripts/analyze.py
 python scripts/analyze_scale.py
 python scripts/analyze_frontier.py
+python scripts/v2_analyze.py
 python scripts/make_figures.py
 </code></pre>
 <p>To re-run against the API with your own key:</p>
@@ -793,11 +1022,18 @@ python scripts/run_experiment.py --phase secondary --run-id my-run
 python scripts/analyze.py --run-id my-run
 python scripts/scale_run.py run          # optional: the 50k scale run (~$2.60)
 python scripts/frontier_run.py run       # optional: the frontier comparison (~$0.36)
+python scripts/v2.py run                 # optional: the raw-evidence experiment (~$0.62)
+python scripts/v2_analyze.py
 </code></pre>
 <p>Expect small differences. Jev isn't perfectly deterministic, and a later snapshot may behave
 differently. Check the <code>model</code> field in your responses.</p>
-<h2>17. Conclusion</h2>
-<p>On these 224 primary cases, Jev did what the severity score can't. It used reachability,
+<h2>18. Conclusion</h2>
+<p>The most useful answer I found isn't "Jev decides priority". If your facts are verified, a rule
+decides priority better, and more cheaply and transparently. Jev's value is one step earlier. It
+reads raw code and config into those facts, fast and cheaply enough to run on every finding. It
+leans toward caution when it's wrong. Given only raw evidence, Jev plus a fixed rule sent a human 92
+of 450 findings and missed none of the urgent ones, where severity sorting sent 366 and missed 7.</p>
+<p>On the first experiment's 224 primary cases, Jev also did what the severity score can't. It used reachability,
 exposure, controls, and asset context to reorder findings, and it beat "sort by CVSS" by a wide,
 statistically clear margin. It moved the right way in every case where severity and context
 disagreed, and it did all of this for a few cents per thousand decisions at a fifth of a second
@@ -808,12 +1044,13 @@ small sample a frontier model agreed with the rubric more often. It
 underweights known exploitation. It can't see a field that isn't there. Its probabilities need
 local calibration before you put thresholds on them. And a well-placed sentence of untrusted text
 can shift its answers.</p>
-<p>My conclusion is narrower than "AI can triage vulnerabilities". Jev is a good fit for the
-judgment step in a triage pipeline, sitting behind deterministic code that computes the facts and
-enforces the hard rules, with humans on the REVIEW path. This is one synthetic benchmark, one
+<p>My conclusion is narrower than "AI can triage vulnerabilities". Use Jev to read evidence, not to
+make policy. Code computes the mechanical facts and enforces the rules, and humans verify what the
+rule ranks high. This is one synthetic benchmark, one
 rubric, and one model snapshot, so check it against your own findings before you rely on it.</p>
 <hr />
-<div class="note"><b>Limitations.</b> Synthetic data only; the frontier comparison covers 40 cases and one prompt
+<div class="note"><b>Limitations.</b> Synthetic data only, including the v2 code snippets, which I wrote along with the
+regex baseline; the frontier comparison covers 40 cases and one prompt
 format; the reference rubric is one author's policy, not ground truth;
 B1 was written by the same author as the rubric; 112 primary cases per domain, and 10 to 15 per
 cell in the secondary experiments; one model snapshot (<code>jev-1.13-20260917</code>); counterfactual effects
